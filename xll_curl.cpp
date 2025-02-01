@@ -1,4 +1,5 @@
 // xll_curl.cpp - curl wrapper for Excel
+#include <thread>
 #include "xll_curl.h"
 
 struct curl_init {
@@ -32,6 +33,7 @@ class curl_easy {
 	CURL* curl;
 public:
 	curl_easy(const char* url = nullptr)
+		: curl{curl_easy_init()}
 	{
 		if (url && *url) {
 			CURLcode code = curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -83,7 +85,7 @@ LPOPER WINAPI xll_curl_version_info()
 }
 
 AddIn xai_curl_easy(
-	Function(XLL_HANDLEX, L"xll_curl_easy_init", CATEGORY L".EASY.INIT")
+	Function(XLL_HANDLEX, L"xll_curl_easy_init", L"\\" CATEGORY L".EASY.INIT")
 	.Arguments({
 		Arg(XLL_CSTRING4, L"url", L"is the URL to fetch.")
 		})
@@ -108,35 +110,123 @@ HANDLEX WINAPI xll_curl_easy_init(const char* url)
 	return h;
 }
 
+void WINAPI perform(OPER async, CURL* curl, HANDLEX s)
+{
+	CURLcode code = curl_easy_setopt(curl, CURLOPT_WRITEDATA, to_pointer<std::string>(s));
+
+	if (code != CURLE_OK) {
+		XLL_ERROR(curl_easy_strerror(code));
+	}
+	code = curl_easy_perform(curl);
+	if (CURLE_OK != code) {
+		XLL_ERROR(curl_easy_strerror(code));
+	}
+
+	XLOPER12 result = { .val = {.num = s}, .xltype = xltypeNum };
+
+	Excel12(xlAsyncReturn, 0, 2, &async, &result);
+}
+
 AddIn xai_curl_easy_perform(
-	Function(XLL_CSTRING, L"xll_curl_easy_perform", CATEGORY L".EASY.PERFORM")
+	Function(XLL_VOID, L"xll_curl_easy_perform", CATEGORY L".EASY.PERFORM")
 	.Arguments({
-		Arg(XLL_HANDLEX, L"handle", L"is a handle to a curl easy handle.")
+		Arg(XLL_HANDLEX, L"handle", L"is a handle to a curl easy handle."),
+		Arg(XLL_HANDLEX, L"string", L"is a handle to a std::string.")
 		})
+	.Asynchronous()
 	.Category(CATEGORY)
-	.FunctionHelp(L"Perform the transfer as described in the handle.")
+	.FunctionHelp(L"Return handle to a std::string by performing the transfer as described in the handle.")
 	.HelpTopic(L"https://curl.se/libcurl/c/curl_easy_perform.html")
 );
-const char* WINAPI xll_curl_easy_perform(HANDLEX h)
+VOID WINAPI xll_curl_easy_perform(HANDLEX h, HANDLEX s, LPOPER async)
 {	
 #pragma XLLEXPORT
-	static std::string buffer;
+	try {
+		handle<curl_easy> h_(h);
+		ensure(h_);
+
+		std::jthread t(perform, *async, h_->operator CURL*(), s);
+		t.detach();
+	}
+	catch (const std::exception& ex) {
+		XLL_ERROR(ex.what());
+	}
+}
+
+AddIn xai_string(
+	Function(XLL_HANDLEX, L"xll_string", L"\\STRING")
+	.Arguments({
+		Arg(XLL_CSTRING4, L"value", L"is the string value.")
+		})
+	.Uncalced()
+	.FunctionHelp(L"Return a handle to a std::string.")
+	.HelpTopic(L"https://en.cppreference.com/w/cpp/string/basic_string")
+);
+HANDLEX WINAPI xll_string(const char* value)
+{
+#pragma XLLEXPORT
+	HANDLEX h = INVALID_HANDLEX;
 
 	try {
-		handle<curl_easy> p(h);
-		ensure(p);
-		CURLcode code = curl_easy_setopt(*p, CURLOPT_WRITEDATA, &buffer);
-		if (code != CURLE_OK) {
-			XLL_ERROR(curl_easy_strerror(code));
-		}
-		code = curl_easy_perform(*p);
-		if (CURLE_OK != code) {
-			XLL_ERROR(curl_easy_strerror(code));
-		}
+		handle<std::string> h_(new std::string(value));
+		h = h_.get();
 	}
 	catch (const std::exception& ex) {
 		XLL_ERROR(ex.what());
 	}
 
-	return buffer.c_str();
+	return h;
+}
+	
+AddIn xai_string_append(
+	Function(XLL_HANDLEX, L"xll_string_append", L"STRING.APPEND")
+	.Arguments({
+		Arg(XLL_HANDLEX, L"handle", L"is a handle to a std::string."),
+		Arg(XLL_CSTRING4, L"str", L"is a string to append."),
+		})
+	.Category(CATEGORY)
+	.FunctionHelp(L"Return appended string.")
+	.HelpTopic(L"https://en.cppreference.com/w/cpp/string/basic_string/append")
+);
+HANDLEX WINAPI xll_string_append(HANDLEX s, const char* str)
+{
+#pragma XLLEXPORT
+	try {
+		handle<std::string> s_(s);
+		ensure(s_);
+		s_->append(str);
+	}
+	catch (const std::exception& ex) {
+		XLL_ERROR(ex.what());
+	}
+
+	return s;
+}
+
+AddIn xai_string_substr(
+	Function(XLL_LPOPER, L"xll_string_substr", L"STRING.SUBSTR")
+	.Arguments({
+		Arg(XLL_HANDLEX, L"handle", L"is a handle to a std::string."),
+		Arg(XLL_UINT, L"pos", L"is the starting position."),
+		Arg(XLL_UINT, L"count", L"is the length of the substring.")
+		})
+	.Category(CATEGORY)
+	.FunctionHelp(L"Return a substring of a string.")
+	.HelpTopic(L"https://en.cppreference.com/w/cpp/string/basic_string/substr")
+);
+LPOPER WINAPI xll_string_substr(HANDLEX s, UINT pos, UINT count)
+{
+#pragma XLLEXPORT
+	static OPER result;
+
+	try {
+		handle<std::string> s_(s);
+		ensure(s_);
+		result = OPER(s_->substr(pos, count ? count : std::string::npos));
+	}
+	catch (const std::exception& ex) {
+		XLL_ERROR(ex.what());
+	}
+
+	return &result;
 }

@@ -248,6 +248,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="xll_curl.cpp" />
+    <ClCompile Include="xll_string.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
